@@ -1,0 +1,59 @@
+let alice_generate_data(data:bitstring) =
+
+  (* 2 *)
+  in (d, =data_req);
+  out (d, (data_ok, data)).
+
+let client_encrypting_data(uid:bitstring) =
+
+  (* 1 *)
+  out (d, data_req);
+  in (d, (=data_ok, userdata:bitstring));
+
+  out (d, pw_req);
+  in (d, (=pw_ans, pw:bitstring));
+
+  new data_secret: bitstring;
+  let data_hash = hash(userdata) in
+  let data_key = gen_sec_key(data_secret,data_hash) in
+  let enc_data = enc(userdata,data_key) in
+  get client_secret_keys(=uid, enc_passport_secret:bitstring, passport_secret_salt:bitstring) in
+  let sec_key = gen_sec_key(pw, passport_secret_salt) in
+  let passport_secret = dec(enc_passport_secret, sec_key) in
+  let sec_data_key = gen_sec_key(passport_secret,data_hash) in
+  let enc_data_secret = enc(data_secret, sec_data_key) in
+  out (c,enc(s,gen_sec_key(passport_secret,passport_secret)));
+
+  in (c, enc_nonce_data:bitstring);
+  let n_enc_data = decn(enc_nonce_data, client_auth_key) in
+
+  event client_enc_data(uid,enc_data);
+  out(c, enc((uid, enc_data, enc_data_secret, data_hash, n_enc_data), client_auth_key)).
+
+(* used by the Secure Sharing Protocol *)
+let data_server() =
+
+  (* 11 *)
+  in (c, enc_data_req_to_server:bitstring);
+  let (=data_req, uid:bitstring, N2:nonce) =dec(enc_data_req_to_server,client_auth_key) in
+
+  (* 12 *)
+  get server_enc_data(=uid, enc_data:bitstring, enc_data_secret:bitstring, data_hash:bitstring) in
+  let data_to_client = (uid, enc_data_secret, data_hash, N2) in
+  out (c, enc(data_to_client,client_auth_key));
+
+  (* 19 *)
+  let data_to_bot = (enc_data, data_hash) in
+  out (c, enc(data_to_bot,bot_auth_key)).
+
+let server_encrypting_data() =
+
+  (* 3 *)
+  new nonce_enc_data:nonce;
+  out (c, encn(nonce_enc_data,client_auth_key));
+
+  in (c, data2besaved:bitstring);
+  let (uid:bitstring, enc_data:bitstring, enc_data_secret:bitstring, data_hash:bitstring, =nonce_enc_data) = dec(data2besaved,client_auth_key) in
+  insert  server_enc_data(uid, enc_data, enc_data_secret, data_hash);
+  event server_saved_data(uid, enc_data);
+  !data_server().

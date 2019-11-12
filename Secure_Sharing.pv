@@ -1,0 +1,114 @@
+let alice(uid:bitstring) =
+
+  (* 1 *)
+  out (c, (login_req, uid));
+
+  (* 8 *)
+  in (d, =data_req);
+  out (d, data_ok).
+
+let serge() =
+
+  (* 2 *)
+  in (c, (=login_req, uid:bitstring));
+
+  (* 3 *)
+  out (e, (data_req,uid));
+
+  (* 21 *)
+  in (e, data1:bitstring).
+
+let bot() =
+
+  new seckey:skey;	(* bot's private key *)
+  let pubkey = pk(seckey) in
+  out(c, pubkey);
+  insert RSA_public_keys(pubkey, fphash(pubkey));
+
+  (* 4 *)
+  in (e, (=data_req, uid:bitstring));
+
+  (* 5 *)
+  new N1:nonce;
+  let kfp = fphash(pubkey) in
+  let enc_req = (data_req, kfp, N1) in
+  out (c, (botid, enc((uid,enc_req),bot_auth_key)));
+
+  (* 18 *)
+  in (c, enc_enc_credentials_to_bot:bitstring);
+  let (=uid, enc_credentials:bitstring, enc_cred_secret:bitstring, cred_hash:bitstring, =N1) = dec(enc_enc_credentials_to_bot,bot_auth_key) in
+
+  let cred_secret = rsa_dec(enc_cred_secret, seckey) in
+  let cred_sec_key = gen_sec_key(cred_secret, cred_hash) in
+  let (d_hash:bitstring, data_secret:bitstring, =N1) = dec(enc_credentials, cred_sec_key) in
+  let credentials = (d_hash,data_secret,N1) in
+  if cred_hash = hash(credentials) then
+
+  (* 20 *)
+  in (c, data_to_bot:bitstring);
+  let (enc_data:bitstring,data_hash:bitstring) = dec(data_to_bot,bot_auth_key) in
+
+  let data_key = gen_sec_key(data_secret,d_hash) in
+  let data = dec(enc_data, data_key) in
+  if data_hash = hash(data) then
+
+  event bot_received_data(data,N1);
+
+  (* 22 *)
+  out(e, data).
+
+let client(uid:bitstring) =
+
+  (* 6 *)
+  in (c, enc_req_to_client:bitstring);
+  let (=data_req, kfp:bitstring, N1:nonce) = dec(enc_req_to_client,client_auth_key) in
+
+  (* 7 *)
+  out (d, data_req);
+
+  (* 9 *)
+  in (d, =data_ok);
+
+  (* 10 *)
+  new N2: nonce;
+  let enc_data_req_to_server = (data_req, uid, N2) in
+  out (c, enc(enc_data_req_to_server,client_auth_key));
+
+  (* 13 *)
+  in (c, data_to_client:bitstring);
+  let (=uid, enc_data_secret:bitstring, data_hash:bitstring, =N2) = dec(data_to_client,client_auth_key) in
+  out (d, pw_req);
+  in (d, (=pw_ans, pw:bitstring));
+
+  (* 14 *)
+  get client_secret_keys(=uid, enc_passport_secret, passport_secret_salt) in
+  let sec_key = gen_sec_key(pw, passport_secret_salt) in
+  let passport_secret = dec(enc_passport_secret, sec_key) in
+
+  let sec_data_key = gen_sec_key(passport_secret, data_hash) in
+  let data_secret = dec(enc_data_secret, sec_data_key) in
+
+  (* 15 the client forms the credentials *)
+  let credentials = (data_hash, data_secret, N1) in
+
+  (* 16 credentials_key *)
+  new cred_secret:bitstring;
+  let cred_hash = hash(credentials) in
+  let sec_cred_key = gen_sec_key(cred_secret, cred_hash) in
+  let enc_credentials = enc(credentials, sec_cred_key) in
+
+  (* 17 *)
+  get RSA_public_keys(pubkey, =kfp) in
+	let enc_cred_secret = rsa_enc(cred_secret, pubkey) in
+  let enc_enc_credentials = (uid, enc_credentials, enc_cred_secret, cred_hash, N1) in
+  event client_sent_data(data,N1);
+  out (c, (uid,enc((botid, enc_enc_credentials), client_auth_key))).
+
+let chat_server() =
+
+  in (c, m:bitstring);
+  let (sender:bitstring, enc_msg:bitstring) = m in
+  get server_auth_keys(=sender, send_key:key) in
+  let (dest:bitstring, msg:bitstring) = dec(enc_msg,send_key) in
+  get server_auth_keys(=dest, dest_key:key) in
+  out (c, enc(msg,dest_key)).

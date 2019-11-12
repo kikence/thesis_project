@@ -1,0 +1,422 @@
+type nonce.
+
+free c: channel.
+free d: channel [private].
+free e: channel [private].
+free pw_req: bitstring.
+free pw_ans: bitstring.
+free id_req: bitstring.
+free login_req: bitstring.
+free data_req: bitstring.
+free data_ok: bitstring.
+free botid: bitstring.
+free data:bitstring [private].
+type key.
+
+
+(* Hash functions *)
+fun hash(bitstring): bitstring.
+fun fingerprint(bitstring): bitstring.
+
+
+(* Symmetric key encryption *)
+fun enc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; dec(enc(m,k),k) = m.
+
+fun encn(nonce, key): bitstring.
+reduc forall m: nonce, k: key; decn(encn(m,k),k) = m.
+
+(* Secret key generation *)
+fun gen_sec_key(bitstring, bitstring): key.
+
+
+(* tabella chiavi server *)
+table server_secret_keys(bitstring, bitstring, bitstring, bitstring). (* (uid, fingerprint, enc_passport_secret, passport_secret_salt) *)
+
+(* tabella chiavi precondivise *)
+table server_auth_keys(bitstring, key).
+
+(* tabella chiavi client *)
+table client_secret_keys(bitstring,bitstring,bitstring). (* (uid, enc_passport_secret, passport_secret_salt) *)
+
+(* tabella encrypted data server *)
+table server_enc_data(bitstring, bitstring, bitstring, bitstring). (* uid, enc_data, enc_data_secret, data_hash *)
+
+
+(* RSA encryption *)
+type skey.
+type pkey.
+
+fun pk(skey): pkey.
+fun rsa_enc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; rsa_dec(rsa_enc(m, pk(k)),k) = m.
+
+
+(* tabella chiavi RSA bot *)
+table RSA_public_keys(pkey, bitstring). (* (pkey, fingerprint) *)
+
+(* tabella chiavi RSA server *)
+table server_RSA_public_keys(pkey, bitstring). (* (pkey, fingerprint) *)
+
+
+(* Hash function *)
+fun fphash(pkey): bitstring.
+
+
+free client_auth_key:key [private].
+free bot_auth_key:key [private].
+
+
+
+(*********************************************************************************************************************************************)
+
+
+
+free s:bitstring [private].
+query attacker(s).
+query attacker(data).
+
+event bot_received_data(bitstring,nonce).
+event client_sent_data(bitstring,nonce).
+(* event uploaded_data(bitstring). *)
+event server_saved_data(bitstring,bitstring).
+event client_enc_data(bitstring,bitstring).
+
+
+event server_saved_pass_sec(bitstring,bitstring).
+event client_gen_pass_sec(bitstring,bitstring).
+event client_req_pass_sec(bitstring,bitstring).
+
+
+query u:bitstring, m:bitstring; event (server_saved_pass_sec(u,m))  ==> event (client_gen_pass_sec(u,m)).
+query u:bitstring, m:bitstring; event (client_req_pass_sec(u,m))  ==> event (server_saved_pass_sec(u,m)).
+
+query id:bitstring, m:bitstring; event (server_saved_data(id,m))  ==> event (client_enc_data(id,m)).
+query m:bitstring, n:nonce; event (bot_received_data(m,n))  ==> event (client_sent_data(m,n)).
+
+
+
+
+let alice_password_gen()=
+
+	(* 3 *)
+
+	new pw:bitstring;
+	!(in (d, =pw_req);
+	out (d, (pw_ans, pw))).
+
+
+let client_passport_secret_gen(uid:bitstring) =
+
+	(* 2 *)
+
+  in (c, encNs:bitstring);
+  let Ns = decn(encNs,client_auth_key) in
+  out (d, pw_req);
+
+
+	(* 4 *)
+  in (d, (=pw_ans,pw:bitstring));
+  new Nc:nonce;
+  let passport_secret_salt = (Nc, Ns) in
+  let sec_key = gen_sec_key(pw,passport_secret_salt) in
+  new passport_secret:bitstring;
+
+	(* 5 *)
+
+  let enc_passport_secret = enc(passport_secret,sec_key) in
+  event client_gen_pass_sec(uid,enc_passport_secret);
+  out (c, enc((uid, enc_passport_secret, passport_secret_salt, fingerprint(passport_secret)), client_auth_key)).
+
+let server_passport_secret_request() =
+
+  (* 2 *)
+
+  in (c, secret_id:bitstring);
+  let (=id_req, uid:bitstring, N1c:nonce) = dec(secret_id, client_auth_key) in
+  get server_secret_keys(=uid,fp:bitstring,enc_passport_secret:bitstring,passport_secret_salt:bitstring) in
+  out (c, enc((fp,passport_secret_salt,enc_passport_secret, N1c),client_auth_key)).
+
+
+
+let server_passport_secret_gen() =
+
+  (* 1 *)
+
+	new Ns:nonce;
+	out (c, encn(Ns,client_auth_key));
+
+
+	(* 6 *)
+
+  in (c, secrets:bitstring);
+  let (uid:bitstring, enc_passport_secret:bitstring, passport_secret_salt:bitstring, fp:bitstring) = dec(secrets,client_auth_key) in
+  let (Nc:nonce,=Ns) = passport_secret_salt in
+  insert server_secret_keys(uid,fp,enc_passport_secret,passport_secret_salt);
+  event server_saved_pass_sec(uid,enc_passport_secret);
+  !server_passport_secret_request().
+
+
+
+(******************************************************************************************************************)
+
+
+
+let client_passport_secret_request(uid:bitstring) =
+
+  (* 1 *)
+
+  new N1c:nonce;
+  let secret_req = (id_req, uid, N1c) in
+  out (c, enc(secret_req, client_auth_key));
+
+  (* 3 *)
+
+  in (c, secret_ans:bitstring);
+  let (fp:bitstring, passport_secret_salt:bitstring, enc_passport_secret:bitstring, =N1c) = dec(secret_ans,client_auth_key) in
+  insert client_secret_keys(uid, enc_passport_secret, passport_secret_salt);
+  event client_req_pass_sec(uid,enc_passport_secret).
+
+
+
+
+
+(*************************************************************************************************************************)
+
+let alice_generate_data(data:bitstring) =
+
+  (* 2 *)
+
+  in (d, =data_req);
+(*  event uploaded_data(data); *)
+  out (d, (data_ok, data)).
+
+
+let client_encrypting_data(uid:bitstring) =
+
+  (* 1 *)
+
+  out (d, data_req);
+  in (d, (=data_ok, userdata:bitstring));
+
+  out (d, pw_req);
+  in (d, (=pw_ans, pw:bitstring));
+
+  new data_secret: bitstring;
+  let data_hash = hash(userdata) in
+  let data_key = gen_sec_key(data_secret,data_hash) in
+  let enc_data = enc(userdata,data_key) in
+  get client_secret_keys(=uid, enc_passport_secret:bitstring, passport_secret_salt:bitstring) in
+  let sec_key = gen_sec_key(pw, passport_secret_salt) in
+  let passport_secret = dec(enc_passport_secret, sec_key) in
+  let sec_data_key = gen_sec_key(passport_secret,data_hash) in
+  let enc_data_secret = enc(data_secret, sec_data_key) in
+
+  out (c,enc(s,gen_sec_key(passport_secret,passport_secret))); (*  // segretezza del passport secret*)
+
+  in (c, enc_nonce_data:bitstring);
+  let n_enc_data = decn(enc_nonce_data, client_auth_key) in
+
+
+  event client_enc_data(uid,enc_data);
+  out(c, enc((uid, enc_data, enc_data_secret, data_hash, n_enc_data),client_auth_key)).
+
+
+let data_server() =
+
+  (* 12 *)
+
+  in (c, enc_data_req_to_server:bitstring);
+  let (=data_req, uid:bitstring, N2:nonce) =
+				dec(enc_data_req_to_server,client_auth_key) in
+
+
+  (* 13 *)
+
+  get server_enc_data(=uid, enc_data:bitstring,
+														enc_data_secret:bitstring,
+														data_hash:bitstring) in
+  let data_to_client = (uid, enc_data_secret, data_hash, N2) in
+  out (c, enc(data_to_client,client_auth_key));
+
+
+  (* 20 *)
+
+  let data_to_bot = (enc_data, data_hash) in
+  out (c, enc(data_to_bot,bot_auth_key)).
+
+
+let server_encrypting_data() =
+
+  (* 3 *)
+
+  new nonce_enc_data:nonce;
+  out (c, encn(nonce_enc_data,client_auth_key));
+
+  in (c, data2besaved:bitstring);
+  let (uid:bitstring, enc_data:bitstring, enc_data_secret:bitstring, data_hash:bitstring, =nonce_enc_data) = dec(data2besaved,client_auth_key) in
+  insert  server_enc_data(uid, enc_data, enc_data_secret, data_hash);
+  event server_saved_data(uid, enc_data);
+  !data_server().
+
+(********************************************************************************************************************************)
+
+
+let alice(uid:bitstring) =
+
+  (* 1 *)
+
+  out (c, (login_req, uid));
+
+
+  (* 9 *)
+
+  in (d, =data_req);
+  out (d, data_ok).
+
+
+  let serge() =
+
+  (* 2 *)
+
+  in (c, (=login_req, uid:bitstring));
+
+
+  (* 3 *)
+
+  out (e, (data_req,uid));
+
+
+  (* 22 *)
+
+  in (e, data1:bitstring).
+
+
+let bot() =
+
+  new seckey:skey;	(* bot's private key *)
+  let pubkey = pk(seckey) in
+  out(c, pubkey); insert RSA_public_keys(pubkey, fphash(pubkey));
+
+  (* 3 *)
+
+  in (e, (=data_req, uid:bitstring));
+
+
+  (*  4  *)
+
+  new N1:nonce;
+  let kfp = fphash(pubkey) in
+  let enc_req = (data_req, kfp, N1) in
+  out (c, (botid, enc((uid,enc_req),bot_auth_key)));
+
+
+  (* 19 *)
+
+  in (c, enc_enc_credentials_to_bot:bitstring);
+  let (=uid, enc_credentials:bitstring, enc_cred_secret:bitstring, cred_hash:bitstring, =N1) = dec(enc_enc_credentials_to_bot,bot_auth_key) in
+
+  let cred_secret = rsa_dec(enc_cred_secret, seckey) in
+  let cred_sec_key = gen_sec_key(cred_secret, cred_hash) in
+  let (d_hash:bitstring, data_secret:bitstring, =N1) = dec(enc_credentials, cred_sec_key) in
+  let credentials = (d_hash,data_secret,N1) in
+  if cred_hash = hash(credentials) then
+
+
+  (* 21 *)
+
+  in (c, data_to_bot:bitstring);
+  let (enc_data:bitstring, data_hash:bitstring) = dec(data_to_bot,bot_auth_key) in
+
+  let data_key = gen_sec_key(data_secret,d_hash) in
+  let data = dec(enc_data, data_key) in
+  if data_hash = hash(data) then
+
+  event bot_received_data(data,N1);
+  (* 22 *)
+  out(e, data).
+
+
+let client(uid:bitstring) =
+
+  (* 7 *)
+
+  in (c, enc_req_to_client:bitstring);
+  let (=data_req, kfp:bitstring, N1:nonce) = dec(enc_req_to_client,client_auth_key) in
+
+  (* 8 *)
+
+  out (d, data_req);
+
+
+  (* 10 *)
+
+  in (d, =data_ok);
+
+
+  (* 11 *)
+
+  new N2: nonce;
+  let enc_data_req_to_server = (data_req, uid, N2) in
+  out (c, enc(enc_data_req_to_server,client_auth_key));
+
+
+  (* 14 *)
+
+  in (c, data_to_client:bitstring);
+  let (=uid, enc_data_secret:bitstring, data_hash:bitstring, =N2) = dec(data_to_client,client_auth_key) in
+  out (d, pw_req);
+
+  in (d, (=pw_ans, pw:bitstring));
+
+  get client_secret_keys(=uid, enc_passport_secret, passport_secret_salt) in
+  let sec_key = gen_sec_key(pw, passport_secret_salt) in
+  let passport_secret = dec(enc_passport_secret, sec_key) in
+
+  let sec_data_key = gen_sec_key(passport_secret, data_hash) in
+  let data_secret = dec(enc_data_secret, sec_data_key) in
+
+
+  (* 15 the client forms the credentials *)
+
+  let credentials = (data_hash, data_secret, N1) in
+
+
+  (* 16 credentials_key *)
+
+  new cred_secret:bitstring;
+  let cred_hash = hash(credentials) in
+  let sec_cred_key = gen_sec_key(cred_secret, cred_hash) in
+  let enc_credentials = enc(credentials, sec_cred_key) in
+
+
+  (* 17 *)
+
+  get RSA_public_keys(pubkey, =kfp) in
+	let enc_cred_secret = rsa_enc(cred_secret, pubkey) in
+  let enc_enc_credentials = (uid, enc_credentials, enc_cred_secret, cred_hash, N1) in
+  event client_sent_data(data,N1);
+  out (c, (uid,enc((botid, enc_enc_credentials), client_auth_key))).
+
+let chat_server() =
+
+  (* 5 *)
+
+  in (c, m:bitstring);
+  let (sender:bitstring, enc_msg:bitstring) = m in
+  get server_auth_keys(=sender, send_key:key) in
+  let (dest:bitstring, msg:bitstring) = dec(enc_msg,send_key) in
+  get server_auth_keys(=dest, dest_key:key) in
+  out (c, enc(msg,dest_key)).
+
+
+
+process
+      new uid:bitstring;
+      insert server_auth_keys(uid,client_auth_key);
+      insert server_auth_keys(botid,bot_auth_key);
+		 	( alice_password_gen()  | client_passport_secret_gen(uid) | server_passport_secret_gen() |
+      client_passport_secret_request(uid) |
+      alice_generate_data(data) | client_encrypting_data(uid) | server_encrypting_data() |
+			alice(uid) | client(uid) | bot() | serge() | !chat_server()
+      | (phase 1; out(c, client_auth_key)))

@@ -1,0 +1,11 @@
+process
+      new uid:bitstring;
+      insert server_auth_keys(uid,client_auth_key);
+      insert server_auth_keys(botid,bot_auth_key);
+		 	( alice_password_gen()  | client_passport_secret_gen(uid) |
+      server_passport_secret_gen() |
+      client_passport_secret_request(uid) |
+      alice_generate_data(data) | client_encrypting_data(uid) |
+      server_encrypting_data() |
+			alice(uid) | client(uid) | bot() | serge() | !chat_server()
+      | (phase 1; out(c, client_auth_key)))
